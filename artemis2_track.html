@@ -1771,51 +1771,50 @@ function initTimelineSlider(data){
   };
 }
 
-// ── PDF save for a chart ──
+// ── Save chart as light-mode image ──
 function saveChartAsPDF(chartId, title){
   const chart=chartInstances[chartId];
   if(!chart)return;
-  // Temporarily switch to light mode
-  const origBg=chart.canvas.style.background;
-  chart.options.plugins.legend=chart.options.plugins.legend||{};
-  const savedOpts=JSON.parse(JSON.stringify(chart.options));
-  // Light mode colors
-  function setLightMode(opts){
-    if(opts.scales){
-      for(const key of Object.keys(opts.scales)){
-        const s=opts.scales[key];
-        if(s.ticks)s.ticks.color='#333';
-        if(s.grid)s.grid.color='#ddd';
-        if(s.title){s.title.color='#333';}
-      }
-    }
-    if(opts.plugins&&opts.plugins.legend&&opts.plugins.legend.labels){
-      opts.plugins.legend.labels.color='#333';
-    }
+
+  // Save current colors, switch to light mode, render, restore
+  const saved=[];
+  const scales=chart.options.scales||{};
+  for(const key of Object.keys(scales)){
+    const s=scales[key];
+    const entry={scale:s, ticks:null, grid:null, title:null};
+    if(s.ticks){entry.ticks=s.ticks.color; s.ticks.color='#333';}
+    if(s.grid){entry.grid=s.grid.color; s.grid.color='#ddd';}
+    if(s.title){entry.title=s.title.color; s.title.color='#333';}
+    saved.push(entry);
   }
-  setLightMode(chart.options);
-  chart.canvas.style.background='#ffffff';
+  let savedLegendColor=null;
+  const leg=chart.options.plugins&&chart.options.plugins.legend;
+  if(leg&&leg.labels){savedLegendColor=leg.labels.color; leg.labels.color='#333';}
+
   chart.update('none');
 
-  // Render to an offscreen canvas with white background
+  // Draw onto offscreen canvas with white background
   const W=chart.canvas.width, H=chart.canvas.height;
   const offscreen=document.createElement('canvas');
-  offscreen.width=W;offscreen.height=H;
+  offscreen.width=W; offscreen.height=H;
   const octx=offscreen.getContext('2d');
   octx.fillStyle='#ffffff';
   octx.fillRect(0,0,W,H);
   octx.drawImage(chart.canvas,0,0);
 
-  // Create PDF-like single-page document via SVG foreignObject in a downloadable image
-  // Use simple approach: save as PNG (universally compatible)
+  // Download
   const link=document.createElement('a');
   link.download=(title||chartId).replace(/[^a-zA-Z0-9_-]/g,'_')+'.png';
   link.href=offscreen.toDataURL('image/png');
   link.click();
 
-  // Restore dark mode
-  Object.assign(chart.options,savedOpts);
-  chart.canvas.style.background=origBg||'';
+  // Restore dark-mode colors
+  for(const e of saved){
+    if(e.ticks!==null)e.scale.ticks.color=e.ticks;
+    if(e.grid!==null)e.scale.grid.color=e.grid;
+    if(e.title!==null)e.scale.title.color=e.title;
+  }
+  if(savedLegendColor!==null)leg.labels.color=savedLegendColor;
   chart.update('none');
 }
 
