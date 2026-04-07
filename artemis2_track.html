@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Artemis II – Sky Track (v0.1)</title>
+<title>Artemis II – Sky Track (v0.2)</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Helvetica Neue',Arial,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}
@@ -53,6 +53,9 @@ td{padding:.35rem .7rem;border-bottom:1px solid #161b22;white-space:nowrap}
 tr:hover td{background:#1a2032}
 #tooltip{position:fixed;background:rgba(22,27,34,.95);border:1px solid #30363d;border-radius:6px;padding:.45rem .7rem;font-size:.78rem;pointer-events:none;display:none;z-index:100;line-height:1.7}
 .note{color:#8b949e;font-size:.75rem;margin-top:.35rem}
+.chart-pdf-btn{background:#21262d;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:.2rem .6rem;cursor:pointer;font-size:.72rem;float:right;margin-top:-.3rem}
+.chart-pdf-btn:hover{background:#30363d;color:#e6edf3}
+#tl-slider{background:#0d1117;border:1px solid #30363d;border-radius:4px}
 </style>
 </head>
 <body>
@@ -60,7 +63,7 @@ tr:hover td{background:#1a2032}
 <header>
   <div>
     <h1>Artemis II &mdash; Geocentric RA/Dec &amp; Sky Track (J2000)</h1>
-    <div class="sub">CCSDS OEM · EME2000 frame · epoch &amp; equinox J2000.0 · v0.1</div>
+    <div class="sub">CCSDS OEM · EME2000 frame · epoch &amp; equinox J2000.0 · v0.2</div>
   </div>
 </header>
 
@@ -77,6 +80,15 @@ tr:hover td{background:#1a2032}
 
   <!-- TAB: Track & Charts -->
   <div id="tab-track" class="tab-pane">
+    <div class="card" id="timeline-slider-card" style="display:none">
+      <h2>Timeline range</h2>
+      <div style="display:flex;align-items:center;gap:.8rem">
+        <span id="tl-start-label" style="font-size:.78rem;color:#58a6ff;min-width:130px"></span>
+        <div id="tl-slider" style="flex:1;position:relative;height:28px;cursor:pointer"></div>
+        <span id="tl-end-label" style="font-size:.78rem;color:#58a6ff;min-width:130px;text-align:right"></span>
+      </div>
+      <canvas id="tl-canvas" style="display:none"></canvas>
+    </div>
     <div class="card">
       <h2>Geocentric sky track — RA / Dec J2000 (colour = time: blue→yellow)</h2>
       <canvas id="sky-track-canvas" height="460" style="width:100%;display:block"></canvas>
@@ -95,6 +107,10 @@ tr:hover td{background:#1a2032}
         <p class="note">Model: Lambertian sphere, r=2.5 m, geometric albedo=0.15, with Sun phase angle. Lower = brighter. Dashed line = naked-eye limit (~6.5).</p></div>
       <div class="card"><h2>Proper Motion vs UTC</h2><canvas id="pm-chart" class="plot" height="220"></canvas>
         <p class="note">Angular rate on the sky from finite differencing of consecutive RA/Dec positions.</p></div>
+    </div>
+    <div class="chart-row">
+      <div class="card"><h2>Angular Separation from Moon vs UTC</h2><canvas id="moon-sep-chart" class="plot" height="220"></canvas>
+        <p class="note">Angular distance between spacecraft and Moon centre (degrees). Low-precision Moon position (~0.3°).</p></div>
     </div>
   </div>
 
@@ -159,6 +175,7 @@ tr:hover td{background:#1a2032}
               <th>dDec (″/s)</th>
               <th>Range (km)</th>
               <th>Motion (″/s)</th>
+              <th>Moon sep (°)</th>
             </tr>
           </thead>
           <tbody id="tbl-body"></tbody>
@@ -334,7 +351,7 @@ tr:hover td{background:#1a2032}
 <script>
 'use strict';
 
-const APP_VERSION = 'v0.1';
+const APP_VERSION = 'v0.2';
 
 // ============================================================
 // Star catalog  (J2000 RA/Dec degrees, visual magnitude)
@@ -955,6 +972,9 @@ function finaliseMissionData(){
     const d=missionData[i];
     // Magnitude: only possible when we have XYZ (OEM source)
     d.est_mag=d.x_km!=null?estimateMag(d.x_km,d.y_km,d.z_km,d.jd):99;
+    // Angular separation from Moon centre
+    const moon=moonPosition(d.jd);
+    d.moon_sep=angSep(d.topo_ra,d.topo_dec,moon.ra,moon.dec);
     // Geocentric proper motion: skip finite-diff if Horizons already provided rates
     if(d.pm_as===0){
       if(i>0){
@@ -1008,6 +1028,7 @@ function finaliseMissionData(){
   initSkyViewSlider();
   renderTable(D);
   drawSkyTrack(D);
+  initTimelineSlider(D);
   renderCharts(D);
   drawSkyView();
   updateLoadTab();
@@ -1619,7 +1640,8 @@ function renderTable(data){
       `<td>${degToHMS(d.topo_ra)}</td><td>${degToDMS(d.topo_dec)}</td>`+
       `<td>${d.topo_pm_ra.toFixed(2)}</td><td>${d.topo_pm_dec.toFixed(2)}</td>`+
       `<td>${d.topo_range.toFixed(1)}</td>`+
-      `<td>${Math.sqrt(d.topo_pm_ra*d.topo_pm_ra+d.topo_pm_dec*d.topo_pm_dec).toFixed(2)}</td></tr>`
+      `<td>${Math.sqrt(d.topo_pm_ra*d.topo_pm_ra+d.topo_pm_dec*d.topo_pm_dec).toFixed(2)}</td>`+
+      `<td>${d.moon_sep!=null?d.moon_sep.toFixed(2):''}</td></tr>`
     ).join('');
   }
   rebuild('');
@@ -1627,7 +1649,7 @@ function renderTable(data){
 
   // Save as plain text
   document.getElementById('tbl-save').addEventListener('click',()=>{
-    const hdr='AEST             UTC                        RA_deg      Dec_deg     RA(h m s)          Dec(d m s)          dRA"/s   dDec"/s  Range_km    Mot"/s';
+    const hdr='AEST             UTC                        RA_deg      Dec_deg     RA(h m s)          Dec(d m s)          dRA"/s   dDec"/s  Range_km    Mot"/s  Moon_sep';
     const sep='─'.repeat(hdr.length);
     const obsLoc=`Observer: lat=${svLat.toFixed(4)} lon=${svLon.toFixed(4)}`;
     const lines=[
@@ -1646,7 +1668,8 @@ function renderTable(data){
         `${ra_s} ${dec_s} `+
         `${d.topo_pm_ra.toFixed(2).padStart(7)} ${d.topo_pm_dec.toFixed(2).padStart(7)}  `+
         `${d.topo_range.toFixed(1).padStart(10)} `+
-        `${mot.toFixed(2).padStart(7)}`
+        `${mot.toFixed(2).padStart(7)}  `+
+        `${d.moon_sep!=null?d.moon_sep.toFixed(2).padStart(7):''}`
       );
     }
     lines.push(sep);
@@ -1665,23 +1688,180 @@ function renderTable(data){
 // ============================================================
 function destroyChart(id){if(chartInstances[id]){chartInstances[id].destroy();delete chartInstances[id]}}
 
+// ── Timeline range slider state ──
+let tlMin=0, tlMax=1, tlAllData=[];
+function initTimelineSlider(data){
+  tlAllData=data;
+  if(!data.length)return;
+  tlMin=data[0].date.getTime();
+  tlMax=data[data.length-1].date.getTime();
+  const card=document.getElementById('timeline-slider-card');
+  card.style.display='block';
+  const slider=document.getElementById('tl-slider');
+  const startLbl=document.getElementById('tl-start-label');
+  const endLbl=document.getElementById('tl-end-label');
+
+  // Draw dual-handle range slider on a canvas
+  const cvs=document.getElementById('tl-canvas');
+  cvs.style.display='none';  // use div-based approach instead
+  slider.innerHTML='';
+  slider.style.position='relative';
+
+  let handleL=0, handleR=1;  // fractional positions [0,1]
+  const W=()=>slider.clientWidth;
+  const barH=28;
+
+  function fmtDate(ms){const d=new Date(ms);return d.toISOString().slice(0,16).replace('T',' ')+' UTC';}
+  function updateLabels(){
+    const tS=tlMin+handleL*(tlMax-tlMin);
+    const tE=tlMin+handleR*(tlMax-tlMin);
+    startLbl.textContent=fmtDate(tS);
+    endLbl.textContent=fmtDate(tE);
+  }
+
+  function render(){
+    const lx=handleL*W(), rx=handleR*W();
+    slider.innerHTML=`
+      <div style="position:absolute;left:0;top:0;width:${lx}px;height:${barH}px;background:rgba(30,30,30,.8);border-radius:4px 0 0 4px"></div>
+      <div style="position:absolute;left:${rx}px;top:0;width:${W()-rx}px;height:${barH}px;background:rgba(30,30,30,.8);border-radius:0 4px 4px 0"></div>
+      <div style="position:absolute;left:${lx}px;top:0;width:${rx-lx}px;height:${barH}px;background:rgba(88,166,255,.15);border-top:2px solid #58a6ff;border-bottom:2px solid #58a6ff"></div>
+      <div id="tl-handle-l" style="position:absolute;left:${lx-5}px;top:0;width:10px;height:${barH}px;background:#58a6ff;border-radius:3px;cursor:ew-resize"></div>
+      <div id="tl-handle-r" style="position:absolute;left:${rx-5}px;top:0;width:10px;height:${barH}px;background:#58a6ff;border-radius:3px;cursor:ew-resize"></div>`;
+    updateLabels();
+  }
+  render();
+
+  let dragging=null;
+  function onDown(e){
+    const rect=slider.getBoundingClientRect();
+    const x=(e.clientX||e.touches[0].clientX)-rect.left;
+    const lx=handleL*W(), rx=handleR*W();
+    if(Math.abs(x-lx)<15)dragging='L';
+    else if(Math.abs(x-rx)<15)dragging='R';
+    else dragging=null;
+    if(dragging){e.preventDefault();e.stopPropagation();}
+  }
+  function onMove(e){
+    if(!dragging)return;
+    e.preventDefault();
+    const rect=slider.getBoundingClientRect();
+    const x=((e.clientX||e.touches[0].clientX)-rect.left)/W();
+    const clamped=Math.max(0,Math.min(1,x));
+    if(dragging==='L'){handleL=Math.min(clamped,handleR-0.005);}
+    else{handleR=Math.max(clamped,handleL+0.005);}
+    render();
+  }
+  function onUp(){
+    if(!dragging)return;
+    dragging=null;
+    renderCharts(tlAllData);
+  }
+  slider.addEventListener('mousedown',onDown);
+  slider.addEventListener('touchstart',onDown,{passive:false});
+  document.addEventListener('mousemove',onMove);
+  document.addEventListener('touchmove',onMove,{passive:false});
+  document.addEventListener('mouseup',onUp);
+  document.addEventListener('touchend',onUp);
+
+  // Store accessor for current range
+  window._tlRange=()=>{
+    const tS=tlMin+handleL*(tlMax-tlMin);
+    const tE=tlMin+handleR*(tlMax-tlMin);
+    return{start:new Date(tS),end:new Date(tE)};
+  };
+}
+
+// ── PDF save for a chart ──
+function saveChartAsPDF(chartId, title){
+  const chart=chartInstances[chartId];
+  if(!chart)return;
+  // Temporarily switch to light mode
+  const origBg=chart.canvas.style.background;
+  chart.options.plugins.legend=chart.options.plugins.legend||{};
+  const savedOpts=JSON.parse(JSON.stringify(chart.options));
+  // Light mode colors
+  function setLightMode(opts){
+    if(opts.scales){
+      for(const key of Object.keys(opts.scales)){
+        const s=opts.scales[key];
+        if(s.ticks)s.ticks.color='#333';
+        if(s.grid)s.grid.color='#ddd';
+        if(s.title){s.title.color='#333';}
+      }
+    }
+    if(opts.plugins&&opts.plugins.legend&&opts.plugins.legend.labels){
+      opts.plugins.legend.labels.color='#333';
+    }
+  }
+  setLightMode(chart.options);
+  chart.canvas.style.background='#ffffff';
+  chart.update('none');
+
+  // Render to an offscreen canvas with white background
+  const W=chart.canvas.width, H=chart.canvas.height;
+  const offscreen=document.createElement('canvas');
+  offscreen.width=W;offscreen.height=H;
+  const octx=offscreen.getContext('2d');
+  octx.fillStyle='#ffffff';
+  octx.fillRect(0,0,W,H);
+  octx.drawImage(chart.canvas,0,0);
+
+  // Create PDF-like single-page document via SVG foreignObject in a downloadable image
+  // Use simple approach: save as PNG (universally compatible)
+  const link=document.createElement('a');
+  link.download=(title||chartId).replace(/[^a-zA-Z0-9_-]/g,'_')+'.png';
+  link.href=offscreen.toDataURL('image/png');
+  link.click();
+
+  // Restore dark mode
+  Object.assign(chart.options,savedOpts);
+  chart.canvas.style.background=origBg||'';
+  chart.update('none');
+}
+
+// ── Add PDF button to a chart card ──
+function addPDFButton(canvasId, title){
+  const canvas=document.getElementById(canvasId);
+  if(!canvas)return;
+  const card=canvas.closest('.card');
+  if(!card)return;
+  // Remove existing button if any
+  const existing=card.querySelector('.chart-pdf-btn');
+  if(existing)existing.remove();
+  const btn=document.createElement('button');
+  btn.className='chart-pdf-btn';
+  btn.textContent='Save as image';
+  btn.addEventListener('click',()=>saveChartAsPDF(canvasId,title));
+  const h2=card.querySelector('h2');
+  if(h2)h2.appendChild(btn);
+}
+
 function renderCharts(data){
-  const thin=data.filter((_,i)=>i%Math.max(1,Math.floor(data.length/600))===0);
+  // Apply timeline range filter
+  let filtered=data;
+  if(window._tlRange){
+    const{start,end}=window._tlRange();
+    filtered=data.filter(d=>d.date>=start&&d.date<=end);
+  }
+  if(!filtered.length)filtered=data;
+  const thin=filtered.filter((_,i)=>i%Math.max(1,Math.floor(filtered.length/600))===0);
   const xAxis={
     type:'time',
     time:{displayFormats:{hour:'MMM d HH:mm',day:'MMM d'}},
     ticks:{color:'#8b949e',maxRotation:30},grid:{color:'#21262d'},
     title:{display:true,text:'UTC',color:'#8b949e',font:{size:10}},
   };
-  function line(id,label,key,color,yLabel){
+  function line(id,label,key,color,yLabel,extraOpts){
     destroyChart(id);
+    const opts={animation:false,responsive:true,plugins:{legend:{display:false}},
+      scales:{x:xAxis,y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'},
+        title:{display:true,text:yLabel,color:'#8b949e',font:{size:10}}}}};
+    if(extraOpts)Object.assign(opts.scales.y,extraOpts);
     chartInstances[id]=new Chart(document.getElementById(id).getContext('2d'),{
       type:'line',
       data:{datasets:[{label,data:thin.map(d=>({x:d.date,y:d[key]})),
         borderColor:color,backgroundColor:color+'22',borderWidth:1.5,pointRadius:0,fill:false}]},
-      options:{animation:false,responsive:true,plugins:{legend:{display:false}},
-        scales:{x:xAxis,y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'},
-          title:{display:true,text:yLabel,color:'#8b949e',font:{size:10}}}}},
+      options:opts,
     });
   }
   line('ra-chart','RA (°)','topo_ra','#58a6ff','RA (degrees, topocentric ICRF)');
@@ -1737,6 +1917,18 @@ function renderCharts(data){
       scales:{x:xAxis,y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'},
         title:{display:true,text:'Proper motion (arcsec/s)',color:'#8b949e',font:{size:10}}}}},
   });
+
+  // Moon angular separation chart
+  line('moon-sep-chart','Moon sep (°)','moon_sep','#e06060','Angular separation from Moon (degrees)');
+
+  // Add PDF/image save buttons to all charts
+  addPDFButton('ra-chart','RA_vs_UTC');
+  addPDFButton('dec-chart','Dec_vs_UTC');
+  addPDFButton('range-chart','Range_vs_UTC');
+  addPDFButton('combo-chart','RA_Dec_vs_UTC');
+  addPDFButton('mag-chart','Magnitude_vs_UTC');
+  addPDFButton('pm-chart','Proper_Motion_vs_UTC');
+  addPDFButton('moon-sep-chart','Moon_Separation_vs_UTC');
 }
 </script>
 
