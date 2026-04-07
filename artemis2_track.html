@@ -1309,9 +1309,11 @@ function drawSkyView(){
   const elong=moonElongation(jd);
   const illum=Math.round((1-Math.cos(elong*R))/2*100);
   if(moonAA.alt>-5){
-    drawMoonPhase(ctx,moonPt.x,moonPt.y,12,elong);
+    // Moon angular radius ~0.26°; scale to pixels (min 4px so it stays visible when zoomed out)
+    const moonR=Math.max(4, 0.26*Rsky/90);
+    drawMoonPhase(ctx,moonPt.x,moonPt.y,moonR,elong);
     ctx.fillStyle='#9090b8';ctx.font='9px sans-serif';ctx.textAlign='left';
-    ctx.fillText(`Moon ${illum}%`,moonPt.x+14,moonPt.y+3);
+    ctx.fillText(`Moon ${illum}%`,moonPt.x+moonR+2,moonPt.y+3);
   }
 
   // ---- Artemis II ----
@@ -1506,9 +1508,11 @@ function drawPanorama(){
   const illum=Math.round((1-Math.cos(elong*R))/2*100);
   if(isVis(moonAA.az,moonAA.alt)&&moonAA.alt>-3){
     const mx=azToX(moonAA.az),my=altToY(moonAA.alt);
-    drawMoonPhase(ctx,mx,my,10,elong);
+    // Moon angular radius ~0.26°; scale to pixels via panorama scale (min 4px)
+    const moonR=Math.max(4, 0.26*pw/(azMax-azMin));
+    drawMoonPhase(ctx,mx,my,moonR,elong);
     ctx.fillStyle='#9090b8';ctx.font='9px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
-    ctx.fillText(`Moon ${illum}%`,mx+12,my);
+    ctx.fillText(`Moon ${illum}%`,mx+moonR+2,my);
   }
 
   // ---- Artemis II ----
